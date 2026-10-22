@@ -1383,7 +1383,7 @@ async function sbCargarNotif(){
   const u=S.usuarios[meId];if(!u||!(perms(u).registro||perms(u).admin)){S.notificaciones={};return}
   const desde=new Date(Date.now()-2*864e5).toISOString();
   const rows=sbErr(await SB.from('notificaciones').select('*').gte('creado',desde).order('creado',{ascending:false}).limit(100));const o={};
-  rows.forEach(n=>{o[n.id]={tipo:n.tipo,mensaje:n.mensaje,placa:n.placa,puerta:n.puerta,zona:n.zona,ocupacion:n.ocupacion,cupo:n.cupo,
+  rows.filter(n=>!/^medidor_/.test(n.tipo||'')||perms(u).admin).forEach(n=>{o[n.id]={tipo:n.tipo,mensaje:n.mensaje,placa:n.placa,puerta:n.puerta,zona:n.zona,ocupacion:n.ocupacion,cupo:n.cupo,
     creado:n.creado,por:UID2USER[n.creado_por],leidaPor:(n.leida_por||[]).map(x=>UID2USER[x]).filter(Boolean)}});
   S.notificaciones=o;
 }
@@ -3633,7 +3633,10 @@ const AV_TIPO={
   recibo_fuera_orden:['⏩','Recibo fuera de turno','warn'],
   salida_forzada:['⚠','Salida sin terminar el ciclo','bad'],
   aforo_superado:['🚫','Aforo superado','bad'],
-  reverso_ingreso:['↩','Ingreso reversado','info']};
+  reverso_ingreso:['↩','Ingreso reversado','info'],
+  medidor_70:['📊','Espacio de la base: más del 70 %','warn'],
+  medidor_90:['🚨','Espacio de la base casi lleno','bad'],
+  medidor_dias:['⏳','Poco espacio a este ritmo','bad']};
 let avMin=false;try{avMin=localStorage.getItem('perm_av_min')==='1'}catch(e){}
 const avVistos=new Set();let avIni=false;
 function avisosPendientes(){return notifList().filter(n=>!(n.leidaPor||[]).includes(meId))}
@@ -5279,10 +5282,45 @@ async function medCargar(){
     o.innerHTML=`<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin:0 0 4px"><b>Medidor de datos</b><span style="color:${col};font-weight:700">${fmtB(m.total)} de ${fmtB(m.limite)} (${pc.toFixed(1)}%) ${aviso}</span></div>
       <div style="display:flex;height:16px;border-radius:8px;overflow:hidden;background:rgba(128,128,128,.22)">${seg.map(s=>`<div title="${s[0]}: ${fmtB(s[1])}" style="width:${Math.max(0,s[1]/m.limite*100)}%;background:${s[2]}"></div>`).join('')}</div>
       <div style="display:flex;flex-wrap:wrap;gap:4px 14px;margin:6px 0;font-size:.82rem">${seg.map(s=>`<span><i style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${s[2]};margin-right:4px"></i>${s[0]}: <b>${fmtB(s[1])}</b></span>`).join('')}<button class="link" id="medRef">↻ Actualizar</button></div>
+      <div id="medProy" style="margin:6px 0;font-size:.86rem"></div>
+      <div style="position:relative;height:120px;margin:0 0 6px"><canvas id="medHist" aria-label="Historial de espacio usado"></canvas></div>
       <details><summary class="muted" style="cursor:pointer;font-size:.82rem">Tablas por tamaño</summary><table style="font-size:.82rem;margin-top:4px"><tbody>${m.tablas.slice(0,12).map(t=>`<tr><td>${esc(t.tabla)}</td><td style="text-align:right;padding-left:14px">${fmtB(t.bytes)}</td><td class="muted" style="padding-left:14px">≈ ${(+t.filas).toLocaleString('es-CO')} filas</td></tr>`).join('')}</tbody></table></details>
       <div class="muted" style="font-size:.76rem">Cifras de la base (Postgres). El panel de Supabase puede mostrar un poco más porque cuenta además registros internos.</div>`;
-    $('#medRef').onclick=medCargar}
+    $('#medRef').onclick=medCargar;medExtra()}
   catch(e){o.innerHTML='<span class="muted">No se pudo medir: '+esc(e.message)+'. ¿Ejecutaste auditoria_medidor.sql?</span>'}}
+
+/* ---------- proyección e historial del medidor (requiere medidor_historial.sql y medidor_paso2.sql) ---------- */
+let medChart=null;
+function medDias(n){n=+n;return n>365?'más de 1 año':n<=0?'ya superado':n===1?'1 día':n+' días'}
+async function medExtra(){
+  const o=$('#medProy');if(!o)return;
+  try{
+    const pr=sbErr(await SB.rpc('db_proyeccion'));
+    let h='';
+    if(!pr||pr.estado==='sin_datos'||pr.estado==='insuficiente'){
+      h='<span class="muted">📈 Recogiendo historial'+(pr&&pr.historia_dias!=null?' (llevas '+pr.historia_dias+' días)':'')+': la proyección aparece cuando hay 3 días de mediciones.</span>'}
+    else if(pr.estado==='estable'){
+      h='<span style="color:#1E9E55;font-weight:600">📈 Estable: en los últimos '+(pr.base==='7d'?'7':'3')+' días el espacio no crece.</span>'}
+    else{
+      const urg=pr.dias_100<14,col=urg?'#C62828':pr.dias_90<30?'#E08A00':'inherit';
+      h='<span style="color:'+col+'">📈 Crece <b>'+(+pr.mb_dia).toLocaleString('es-CO')+' MB/día</b> · 70 %: <b>'+medDias(pr.dias_70)+'</b> · 90 %: <b>'+medDias(pr.dias_90)+'</b> · 100 %: <b>'+medDias(pr.dias_100)+'</b>'
+        +' <small class="muted">(según los últimos '+(pr.base==='7d'?'7':'3')+' días)</small></span>';
+      if(urg)h+='<div style="color:#C62828;font-weight:700;margin-top:2px">🚨 Quedan menos de 14 días de espacio.</div>'}
+    if(pr&&pr.auditoria_rel!=null)h+='<div class="muted" style="font-size:.78rem;margin-top:2px">Auditoría en disco: '+fmtB(pr.auditoria_rel)+' · filas muertas pendientes: '+(+pr.auditoria_muertas||0).toLocaleString('es-CO')+'</div>';
+    o.innerHTML=h;
+    // gráfico del historial (14 días)
+    const hist=sbErr(await SB.rpc('db_historial',{p_dias:14}))||[];
+    const cv=$('#medHist');if(medChart){medChart.destroy();medChart=null}
+    if(!cv||hist.length<2||typeof Chart==='undefined'){if(cv&&cv.parentNode)cv.parentNode.style.display='none';return}
+    cv.parentNode.style.display='';
+    const MB=1048576,fe=x=>new Date(x).toLocaleString('es-CO',{timeZone:'America/Bogota',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+    medChart=new Chart(cv,{type:'line',data:{labels:hist.map(r=>fe(r.fecha)),datasets:[
+      {label:'Total (MB)',data:hist.map(r=>+(r.total/MB).toFixed(1)),borderColor:'#1E88E5',backgroundColor:'rgba(30,136,229,.12)',fill:true,pointRadius:0,tension:.25,borderWidth:2},
+      {label:'Auditoría en disco (MB)',data:hist.map(r=>+(r.auditoria_rel/MB).toFixed(1)),borderColor:'#7B5BD6',pointRadius:0,tension:.25,borderWidth:2}]},
+      options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
+        plugins:{legend:{position:'bottom',labels:{boxWidth:10,font:{size:10}}}},
+        scales:{x:{ticks:{maxTicksLimit:5,font:{size:10}}},y:{ticks:{font:{size:10}}}}}})}
+  catch(e){o.innerHTML='<span class="muted">Proyección no disponible ('+esc(e.message)+'). ¿Ejecutaste medidor_historial.sql y medidor_paso2.sql?</span>';const cv=$('#medHist');if(cv&&cv.parentNode)cv.parentNode.style.display='none'}}
 
 async function audPausar(){
   const act=$('#audPau').textContent.includes('Pausar');

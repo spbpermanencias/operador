@@ -719,6 +719,9 @@ dialog.dcheq{width:min(1180px,calc(100% - 24px))}
 .oet.e3{background:#E3D7F5;color:#4A2380}.oet.e4{background:#D6F2E0;color:#0B5A2E}.oet.e5{background:#FDE1DE;color:#8B1D16}
 .oet.ev{background:#D62828;color:#fff}
 .opcard.venc{border-left:4px solid #D62828}
+.oppes{margin:6px 0 2px;padding:6px 8px;border-radius:8px;background:#37474F;color:#fff;font-weight:800;font-size:.85rem;text-align:center;letter-spacing:.02em}
+.chip.pesando{background:#37474F;color:#fff;font-weight:800}
+.opcard.pes{border-left:4px solid #37474F}
 .opvenc{margin:6px 0 2px;padding:6px 8px;border-radius:8px;background:#FDE1DE;color:#8B1D16;font-weight:700;font-size:.85rem;text-align:center}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .opvenc{background:#4A1512;color:#FFB4AB}}
 :root[data-theme="dark"] .opvenc{background:#4A1512;color:#FFB4AB}
@@ -1371,7 +1374,7 @@ async function sbCargarVisitas(){
     (v.visita_etapas||[]).forEach(e=>{et[e.etapa_id]={inicio:e.inicio,fin:e.fin,usuario:UID2USER[e.usuario_inicio],usuarioFin:UID2USER[e.usuario_fin],puerta:e.puerta||undefined}});
     o[vid]={uuid:v.id,turno:v.turno||undefined,cedula:v.cedula_conductor||'',placa:v.placa,dia:v.dia,cita:bogLocal(v.fecha_cita)||(v.dia+'T00:00'),operadores:v.operadores||[],bls:v.bls||[],dos:v.delivery_orders||[],
       etapaActual:v.etapa_actual,estado:v.estado,fin:v.fin,fueVencida:v.fue_vencida,puertaAsignada:v.puerta_asignada,habilitada:!!v.habilitada_antes,llamadoHasta:v.llamado_hasta||undefined,llamadoEn:v.llamado_en||undefined,llamadosVencidos:v.llamados_vencidos||0,
-      orden:v.orden==null?null:Number(v.orden),creado:v.created_at,etapas:et,chequeador:v.chequeador_id||null,asignadoEn:v.asignado_en,chequeadorRelevo:v.chequeador_relevo_id||null,cambioTurnoEn:v.cambio_turno_en||undefined};
+      orden:v.orden==null?null:Number(v.orden),creado:v.created_at,etapas:et,chequeador:v.chequeador_id||null,asignadoEn:v.asignado_en,chequeadorRelevo:v.chequeador_relevo_id||null,cambioTurnoEn:v.cambio_turno_en||undefined,pesaje:v.pesaje||undefined,pesajeInicio:v.pesaje_inicio||undefined,pesajeLlegada:v.pesaje_llegada||undefined};
   });
   S.visitas=o;
 }
@@ -3860,10 +3863,12 @@ function renderOpPhone(){
   $('#opRes').innerHTML=[['e0','Sin enturnar'],['e1','Enturnamiento'],['e2','Ingreso'],['e3','Alistamiento'],['e4','Entrega operador'],['e5','Salida'],['ev','Citas vencidas']]
     .map(([c,n])=>`<button type="button" class="oet ${c}${opF.etapa===c?' sel':''}${opF.etapa&&opF.etapa!==c?' apag':''}" data-oet="${c}" aria-pressed="${opF.etapa===c}" title="Mostrar solo ${n}">${n} <b>${cnt[c]||0}</b></button>`).join('');
   box.innerHTML=l.length?l.map(g=>{const [n,c]=etapaOpG(g);const ve=c==='ev';
-    return `<article class="pcard opcard${ve?' venc':''}">
+    const pes=estaPesando(g.v);
+    return `<article class="pcard opcard${ve?' venc':''}${pes?' pes':''}">
       <div class="pc1">${g.v?tnoHTML(g.v,true):''}<span class="plate">${esc(g.placa)}</span>${g.v?ptChip(g.v):''}${docHTML(g.placa,g.dia)}<span class="ocita">Cita <b>${g.cita.slice(11,16)}</b></span></div>
       <div class="pc2">${esc([...g.ops].map(shortOp).join(', '))}</div>
       <div class="opbl">${g.citas.map(c=>`<div><span>BL ${esc(c.bl||'—')}${c.posicion?` <i class="bpos">${esc(c.posicion)}</i>`:''}</span><span>Cant. <b>${esc(c.cantidad||'—')}</b></span></div>`).join('')}</div>
+      ${pes?'<div class="oppes" role="status">⚖ PESANDO · el vehículo está en la báscula</div>':''}
       ${ve?'<div class="opvenc" role="status">⚠ La cita ya está vencida</div>':''}
       <div class="oet big ${c}">${ve?'Cita vencida':n}</div></article>`}).join('')
     :'<div class="pempty">No hay citas con ese filtro.</div>';
@@ -4594,11 +4599,13 @@ function opEstadoDe(g,now){
   if(v.estado==='finalizada'||!v.etapaActual)return 'salio';
   return v.etapaActual;
 }
+function estaPesando(v){return !!v&&v.pesaje==='pesando'&&v.estado!=='finalizada'}   // en báscula (Registro oprimió ⚖ Pesaje y aún no llega a puerta)
+function pesChipOp(v){return estaPesando(v)?'<span class="chip pesando" title="El vehículo está en la báscula">⚖ Pesando</span>':''}
 function opEstChip(k,v){
   if(k==='sin')return '<span class="chip">Sin enturnar</span>';
   if(k==='vencida')return '<span class="chip late">Cita vencida</span>';
   if(k==='salio')return v&&v.salidaForzada?'<span class="chip late">Salida forzada</span>':'<span class="chip ok">Salió</span>';
-  return tnoHTML(v)+'<span class="chip in">'+esc(opEstNom(k))+'</span>';
+  return tnoHTML(v)+pesChipOp(v)+'<span class="chip in">'+esc(opEstNom(k))+'</span>';
 }
 function opFilas(all){
   const now=Date.now(),hoy=ymd(new Date());
